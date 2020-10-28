@@ -18,12 +18,12 @@ class FindOrderService {
     @inject('ProductsRepository')
     private productsRepository: IProductsRepository,
 
-    @inject('OrdersRepository')
+    @inject('CustomersRepository')
     private customersRepository: ICustomersRepository,
   ) {}
 
   public async execute({ id }: IRequest): Promise<Order | undefined> {
-    const order = await this.ordersRepository.findById(id);
+    const order = this.ordersRepository.findById(id);
 
     return order;
   }

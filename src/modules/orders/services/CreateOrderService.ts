@@ -4,8 +4,9 @@ import AppError from '@shared/errors/AppError';
 
 import IProductsRepository from '@modules/products/repositories/IProductsRepository';
 import ICustomersRepository from '@modules/customers/repositories/ICustomersRepository';
-import Order from '../infra/typeorm/entities/Order';
 import IOrdersRepository from '../repositories/IOrdersRepository';
+
+import Order from '../infra/typeorm/entities/Order';
 
 interface IProduct {
   id: string;
@@ -31,65 +32,61 @@ class CreateOrderService {
   ) {}
 
   public async execute({ customer_id, products }: IRequest): Promise<Order> {
-    const customerExists = await this.customersRepository.findById(customer_id);
+    const customer = await this.customersRepository.findById(customer_id);
 
-    if (!customerExists) {
-      throw new AppError('Could not find any costumer with the given id.');
+    if (!customer) {
+      throw new AppError('Customer ID does not exist.');
     }
 
-    const existentProducts = await this.productsRepository.findAllById(
+    const availableProducts = await this.productsRepository.findAllById(
       products,
     );
 
-    if (!existentProducts.length) {
-      throw new AppError('Could not find any products with the given ids.');
+    if (availableProducts.length !== products.length) {
+      throw new AppError('List contains products that do not exist.');
     }
 
-    const existentProductsIds = existentProducts.map(product => product.id);
+    const productsList = products.map(product => {
+      const productInStock = availableProducts.find(p => p.id === product.id);
 
-    const checkInexistentProducts = products.filter(
-      product => !existentProductsIds.includes(product.id),
-    );
+      if (!productInStock) {
+        throw new Error('Something went wrong in the product list.');
+      }
 
-    if (!checkInexistentProducts.length) {
-      throw new AppError(
-        `Could not find product ${checkInexistentProducts[0].id}`,
-      );
-    }
+      if (product.quantity > productInStock.quantity) {
+        throw new AppError(
+          `Product '${productInStock.name}' is not available in that amount.`,
+        );
+      }
 
-    const findProductsWithNoQuantityAvailable = products.filter(
-      product =>
-        existentProducts.filter(p => p.id === product.id)[0].quantity <
-        product.quantity,
-    );
-
-    if (findProductsWithNoQuantityAvailable.length) {
-      throw new AppError(
-        `The quantity ${findProductsWithNoQuantityAvailable[0].quantity} is not available for ${findProductsWithNoQuantityAvailable[0].id}`,
-      );
-    }
-
-    const serializedProducts = products.map(product => ({
-      product_id: product.id,
-      quantity: product.quantity,
-      price: existentProducts.filter(p => p.id === product.id)[0].price,
-    }));
-
-    const order = await this.ordersRepository.create({
-      customer: customerExists,
-      products: serializedProducts,
+      return {
+        product_id: product.id,
+        quantity: product.quantity,
+        price: productInStock.price,
+      };
     });
 
-    const { order_products } = order;
+    const order = await this.ordersRepository.create({
+      customer,
+      products: productsList,
+    });
 
-    const orderedProductsQuantity = order_products.map(product => ({
-      id: product.product_id,
-      quantity:
-        existentProducts.filter(p => p.id === product.product_id)[0].quantity -
-        product.quantity,
-    }));
+    const updatedProductsInQuantity = availableProducts.map(productInStock => {
+      const productInCart = products.find(p => p.id === productInStock.id);
 
-    await this.productsRepository.updateQuantity(orderedProductsQuantity);
+      if (!productInCart) {
+        throw new Error(
+          'Something went wrong updating the quantities in stock.',
+        );
+      }
+
+      return {
+        id: productInStock.id,
+        quantity: productInStock.quantity - productInCart.quantity,
+      };
+    });
+
+    await this.productsRepository.updateQuantity(updatedProductsInQuantity);
 
     return order;
   }
